@@ -7,6 +7,9 @@
 #include <netdb.h>
 using namespace std;
 
+//client_server :
+//
+
 class socket_client
 {
 private:
@@ -14,27 +17,29 @@ private:
     int sock;
     struct sockaddr_in server_addr;
 public:
-    socket_client(/* args */);
+    socket_client(char *argc[]);
     ~socket_client();
     int send_message(const char* msg);
     void receive_message(char* buffer, size_t size);
 };
 
-socket_client::socket_client(/* args */)
+socket_client::socket_client(char *argv[])
 {
     sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) {
         cerr << "Socket creation failed" << endl;
         exit(1);
     }
+    int port = std::stoi(argv[2]);
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(8080); // server port
-    if (inet_pton(AF_INET, "127.0.0.1", &server_addr.sin_addr) <= 0) {
+    server_addr.sin_port = htons(port); // server port
+    if (inet_pton(AF_INET, argv[1], &server_addr.sin_addr) <= 0) {
         cerr << "Invalid address/ Address not supported" << endl;
         exit(1);
     }
-    if (connect(sock, reinterpret_cast<struct sockaddr*>(&server_addr), sizeof(server_addr)) < 0) {
+    if (connect(sock, reinterpret_cast<struct sockaddr*>(&server_addr), sizeof(server_addr)) < 0) 
+    {
         cerr << "Connection failed" << endl;
         exit(1);
     }
@@ -75,11 +80,11 @@ socket_client::~socket_client()
 
 
 
-int main()
+int main(int argc, char *argv[])
 {
-    socket_client client;
+    socket_client client(argv);
     char buffer[1024];
-    for(int i = 0; i < 5; i++)
+    for(int i = 0; i < 10; i++)
     {
         if (client.send_message("hello server") == 0) {
             client.receive_message(buffer, sizeof(buffer));
