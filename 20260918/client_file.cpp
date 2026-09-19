@@ -26,7 +26,7 @@ bool send_all(int sock, const void* data, size_t len)
     ssize_t total_sent = 0;
     while(total_sent < len) 
     {
-        size_t n = send(sock, ptr + total_sent, len - total_sent, 0);
+        ssize_t n = send(sock, ptr + total_sent, len - total_sent, 0);
         if(n <= 0)
         {
             return false;
@@ -60,7 +60,7 @@ bool socket_client::send_all(int sock, const void* data, size_t len)
     ssize_t total_sent = 0;
     while(total_sent < len) 
     {
-        size_t n = send(sock, ptr + total_sent, len - total_sent, 0);
+        ssize_t n = send(sock, ptr + total_sent, len - total_sent, 0);
         if(n <= 0)
         {
             return false;
@@ -74,7 +74,7 @@ bool socket_client::send_all(int sock, const void* data, size_t len)
 bool socket_client::recv_all(int client_sock, void* data, size_t len)
 {
     char *ptr = static_cast<char*>(data);
-    size_t total_received = 0;
+    ssize_t total_received = 0;
     while(total_received < len)
     {
         ssize_t n = recv(client_sock, ptr + total_received, len - total_received, 0);
