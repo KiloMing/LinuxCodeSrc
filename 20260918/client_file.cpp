@@ -4,15 +4,11 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
-#include <cerrno>
-#include <csignal>
-#include <cstdlib>
-#include <cstdio>
+#include <netdb.h>
+#include <cstring>
 #include <cstdint>
 #include <sys/stat.h>
 #include <fcntl.h>
-#include <string>
-#include <stdexcept>
 
 using namespace::std;
 
@@ -23,6 +19,22 @@ struct file_Info
     char file_name[256];
     uint64_t file_size;
 };
+
+bool send_all(int sock, const void* data, size_t len)
+{
+    const char* ptr = static_cast<const char*>(data);
+    ssize_t total_sent = 0;
+    while(total_sent < len) 
+    {
+        size_t n = send(sock, ptr + total_sent, len - total_sent, 0);
+        if(n <= 0)
+        {
+            return false;
+        }
+        total_sent += n;
+    }   
+    return true;
+}
 
 class socket_client
 {
@@ -40,26 +52,21 @@ public:
     bool recv_all(int client_sock, void* data, size_t len);
     bool send_all(int sock, const void* data, size_t len);
     bool send_file(const char* filename);
-    bool wait_ack();
 };
 
 bool socket_client::send_all(int sock, const void* data, size_t len)
 {
     const char* ptr = static_cast<const char*>(data);
-    size_t total_sent = 0;
-    while(total_sent < len)
+    ssize_t total_sent = 0;
+    while(total_sent < len) 
     {
-        ssize_t n = send(sock, ptr + total_sent, len - total_sent, 0);
-        if(n < 0 && errno == EINTR)
-        {
-            continue;
-        }
+        size_t n = send(sock, ptr + total_sent, len - total_sent, 0);
         if(n <= 0)
         {
             return false;
         }
         total_sent += n;
-    }
+    }   
     return true;
 }
 
@@ -71,10 +78,6 @@ bool socket_client::recv_all(int client_sock, void* data, size_t len)
     while(total_received < len)
     {
         ssize_t n = recv(client_sock, ptr + total_received, len - total_received, 0);
-        if(n < 0 && errno == EINTR)
-        {
-            continue;
-        }
         if(n < 0)
         {
             perror("recv");
@@ -95,27 +98,14 @@ bool socket_client::file_init(char *argv[], file_Info &file)
     memset(&file, 0, sizeof(file));
     struct stat st;
     char *filename = argv[3];
-    if(stat(filename, &st) < 0)
+    if(stat(filename, &st))        // ???
     {
         perror("stat");
         return false;
     }
-    if(!S_ISREG(st.st_mode) || st.st_size < 0)
-    {
-        cerr << "Not a regular file" << endl;
-        return false;
-    }
-    // 只传文件名；本地打开时仍使用 argv[3] 的完整路径。
-    const char* base_name = strrchr(filename, '/');
-    base_name = base_name ? base_name + 1 : filename;
-    if(strlen(base_name) == 0 || strlen(base_name) > 250)
-    {
-        cerr << "File name must contain 1-250 bytes (reserve recv_ prefix)" << endl;
-        return false;
-    }
     strncpy(
         file.file_name,
-        base_name,
+        filename,
         sizeof(file.file_name) - 1
     );
     file.file_size = st.st_size;
@@ -130,22 +120,7 @@ socket_client::socket_client(char *argv[])
         cerr << "Socket creation failed" << endl;
         exit(1);
     }
-    int port;
-    try
-    {
-        size_t used = 0;
-        port = std::stoi(argv[2], &used);
-        if(used != strlen(argv[2]) || port < 1 || port > 65535)
-        {
-            throw out_of_range("port");
-        }
-    }
-    catch(const exception&)
-    {
-        cerr << "Invalid port: expected an integer from 1 to 65535" << endl;
-        close(sock);
-        exit(1);
-    }
+    int port = std::stoi(argv[2]);
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons(port); // server port
@@ -153,13 +128,13 @@ socket_client::socket_client(char *argv[])
         cerr << "Invalid address/ Address not supported" << endl;
         exit(1);
     }
-    if (connect(sock, reinterpret_cast<struct sockaddr*>(&server_addr), sizeof(server_addr)) < 0)
+    if (connect(sock, reinterpret_cast<struct sockaddr*>(&server_addr), sizeof(server_addr)) < 0) 
     {
         cerr << "Connection failed" << endl;
         exit(1);
     }
 }
-//sent the string
+//sent the string 
 int socket_client::send_message(const char* msg)
 {
     ssize_t n = write(sock, msg, strlen(msg));
@@ -231,12 +206,8 @@ bool socket_client::send_file(const char* filename)
         }
         else if(n == 0)
         {
-            //file ending
+            //file ending 
             break;
-        }
-        else if(errno == EINTR)
-        {
-            continue;
         }
         else
         {
@@ -250,41 +221,18 @@ bool socket_client::send_file(const char* filename)
     return true;
 }
 
-bool socket_client::wait_ack()
-{
-    char ack[3] = {0};
-    if(!recv_all(sock, ack, 2))
-    {
-        cerr << "Receive ACK failed" << endl;
-        return false;
-    }
-    if(strcmp(ack, "OK") != 0)
-    {
-        cerr << "Invalid ACK" << endl;
-        return false;
-    }
-    cout << "Server ACK: OK" << endl;
-    return true;
-}
-
 int main(int argc, char *argv[])
 {
-    if(argc != 4)
-    {
-        cerr << "Usage: " << argv[0] << " <server_ip> <port> <filename>" << endl;
-        return 1;
-    }
-    // 对端断开时让 send 返回 EPIPE，交给返回值检查处理。
-    signal(SIGPIPE, SIG_IGN);
     socket_client client(argv);
-    file_Info file1{};
-    if(!client.file_init(argv, file1) || !client.send_message(file1))
-    {
-        return 1;
-    }
-    if(!client.wait_ack() || !client.send_file(argv[3]))
-    {
-        return 1;
+    char buffer[1024];
+    file_Info file1;
+    client.file_init(argv, file1);
+    client.send_message(file1);
+    char recv_buffer[1024];
+    client.receive_message(buffer, sizeof(buffer));
+    if(strcmp(buffer, "OK") == 0){
+        cout << "Client: OK" << endl;
+        client.send_file(file1.file_name);
     }
     return 0;
 }

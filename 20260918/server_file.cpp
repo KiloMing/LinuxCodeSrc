@@ -4,15 +4,13 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
-#include <cerrno>
-#include <csignal>
-#include <cstdlib>
-#include <cstdio>
+#include <netdb.h>
+#include <cstring>
 #include <cstdint>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <string>
-using namespace std;
+using namespace std; 
 
 struct file_Info
 {
@@ -25,6 +23,7 @@ class socket_server
 private:
     int server_sock;
     struct sockaddr_in server_addr;
+    int recv_flag = 0;
 public:
     socket_server();
     ~socket_server();
@@ -67,22 +66,19 @@ bool socket_server::recv_file(int client_sock, const file_Info &file)
 
         if(n > 0)
         {
-            // 磁盘 write 也可能短写，按实际返回值继续写。
-            ssize_t total_written = 0;
-            while(total_written < n)
+            // 写入磁盘文件
+            ssize_t written = write(
+                file_fd,
+                buffer,
+                n
+            );
+
+            if(written < 0)
             {
-                ssize_t written = write(file_fd, buffer + total_written, n - total_written);
-                if(written < 0 && errno == EINTR)
-                {
-                    continue;
-                }
-                if(written <= 0)
-                {
-                    cerr << "Write file failed" << endl;
-                    close(file_fd);
-                    return false;
-                }
-                total_written += written;
+                perror("write");
+
+                close(file_fd);
+                return false;
             }
 
             total_received += n;
@@ -101,10 +97,6 @@ bool socket_server::recv_file(int client_sock, const file_Info &file)
             close(file_fd);
             return false;
         }
-        else if(errno == EINTR)
-        {
-            continue;
-        }
         else
         {
             perror("recv");
@@ -114,11 +106,7 @@ bool socket_server::recv_file(int client_sock, const file_Info &file)
         }
     }
 
-    if(close(file_fd) < 0)
-    {
-        perror("close file");
-        return false;
-    }
+    close(file_fd);
 
     cout << "File received successfully!" << endl;
 
@@ -128,20 +116,16 @@ bool socket_server::recv_file(int client_sock, const file_Info &file)
 bool socket_server::send_all(int sock, const void* data, size_t len)
 {
     const char* ptr = static_cast<const char*>(data);
-    size_t total_sent = 0;
-    while(total_sent < len)
+    ssize_t total_sent = 0;
+    while(total_sent < len) 
     {
-        ssize_t n = send(sock, ptr + total_sent, len - total_sent, 0);
-        if(n < 0 && errno == EINTR)
-        {
-            continue;
-        }
+        size_t n = send(sock, ptr + total_sent, len - total_sent, 0);
         if(n <= 0)
         {
             return false;
         }
         total_sent += n;
-    }
+    }   
     return true;
 }
 
@@ -153,10 +137,6 @@ bool socket_server::recv_all(int client_sock, void* data, size_t len)
     while(total_received < len)
     {
         ssize_t n = recv(client_sock, ptr + total_received, len - total_received, 0);
-        if(n < 0 && errno == EINTR)
-        {
-            continue;
-        }
         if(n < 0)
         {
             perror("recv");
@@ -171,7 +151,7 @@ bool socket_server::recv_all(int client_sock, void* data, size_t len)
     }
     return true;
 }
-
+ 
 socket_server::socket_server()
 {
     server_sock = socket(AF_INET, SOCK_STREAM, 0);
@@ -179,20 +159,12 @@ socket_server::socket_server()
         cerr << "Socket creation failed" << endl;
         exit(1);
     }
-    int opt = 1;
-    if(setsockopt(server_sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0)
-    {
-        perror("setsockopt");
-        close(server_sock);
-        exit(1);
-    }
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
     server_addr.sin_addr.s_addr = INADDR_ANY;
     server_addr.sin_port = htons(8080);
-    if (::bind(server_sock, reinterpret_cast<struct sockaddr*>(&server_addr), sizeof(server_addr)) < 0) {
-        perror("bind");
-        close(server_sock);
+    if (bind(server_sock, reinterpret_cast<struct sockaddr*>(&server_addr), sizeof(server_addr)) < 0) {
+        cerr << "Bind failed" << endl;
         exit(1);
     }
 }
@@ -200,32 +172,28 @@ socket_server::socket_server()
 void socket_server::start()
 {
     if (listen(server_sock, 5) < 0) {
-        perror("listen");
-        exit(1);
+        cerr << "Listen failed" << endl;
+        return;
     }
     cout << "Server is listening on port 8080" << endl;
     while(true)
     {
         int client_sock = accept(server_sock, nullptr, nullptr);
-        if(client_sock < 0 && errno == EINTR)
-        {
-            continue;
-        }
         if (client_sock < 0) {
             perror("Accept failed");
             return;
         }
         pid_t pid = fork();
         if(pid > 0)
-        {
-            //父进程保留监听 fd，关闭本次连接的引用。
+        {   
+            //父进程
             close(client_sock);
             //回去等待下一个客户端
             continue;
         }
         else if(pid == 0)
         {
-            //子进程只服务本次连接，关闭监听 fd。
+            //子进程
             cout << "Client connected" << endl;
             close(server_sock);
             file_Info file{};
@@ -236,17 +204,9 @@ void socket_server::start()
                 close(client_sock);
                 _exit(1);
             }
-            // 必须先验证终止符，再把网络字段作为 C 字符串使用。
-            const char* end = static_cast<const char*>(memchr(file.file_name, '\0', sizeof(file.file_name)));
-            if(end == nullptr || end == file.file_name || end - file.file_name > 250 ||
-               strchr(file.file_name, '/') != nullptr)
-            {
-                cerr << "Invalid file name" << endl;
-                close(client_sock);
-                _exit(1);
-            }
             cout << "file name: " << file.file_name << endl;
             cout << "file size: " << file.file_size << endl;
+            recv_flag = 1;   // receive successfully
             const char ok[] = "OK";
             if(!send_all(client_sock, ok, 2))
             {
@@ -254,21 +214,9 @@ void socket_server::start()
                 close(client_sock);
                 _exit(1);
             }
-            if(!recv_file(client_sock, file))
-            {
-                cerr << "Receive file failed" << endl;
-                close(client_sock);
-                _exit(1);
+            recv_file(client_sock, file);
             }
-            close(client_sock);
-            _exit(0);  // 不再回到父进程的 accept 循环。
         }
-        else
-        {
-            perror("fork");
-            close(client_sock);
-        }
-    }
 }
 
 socket_server::~socket_server()
@@ -278,10 +226,6 @@ socket_server::~socket_server()
 
 int main()
 {
-    signal(SIGPIPE, SIG_IGN);
-    // 本练习不收集子进程状态，显式忽略 SIGCHLD 避免僵尸进程。
-    // 后续练习可改为 SIGCHLD + waitpid(-1, ..., WNOHANG)。
-    signal(SIGCHLD, SIG_IGN);
     socket_server server;
     server.start();
     return 0;
