@@ -84,13 +84,13 @@ int main(int argc, char *argv[])
 {
     socket_client client(argv);
     char buffer[1024];
-    for(int i = 0; i < 10; i++)
-    {
-        if (client.send_message("hello server") == 0) {
-            client.receive_message(buffer, sizeof(buffer));
-            sleep(1);
-        }
-            
+    // for(int i = 0; i < 10; i++)
+    // {
+    if (client.send_message("hello server") == 0) {
+        client.receive_message(buffer, sizeof(buffer));
+        sleep(1);
     }
+            
+    // }
     return 0;
 }
